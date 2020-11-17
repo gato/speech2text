@@ -4,7 +4,7 @@ import os
 from pydub import AudioSegment 
 from pydub.silence import split_on_silence 
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, thread
 
 import progress
 import click
@@ -41,19 +41,11 @@ def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise,
         return None
 
     except sr.RequestError as e: 
-        sys.stderr.write('Requests are failing. Please check your internet connection\n')
         raise RuntimeError('Requests are failing. Please check your internet connection')
 
     finally:
         if not keep_temporary:
             os.remove(filename)
-
-def count_done(futures):
-    done = 0
-    for future in futures:
-        if future.done():
-            done += 1
-    return done
 
 # a function that splits the audio file into chunks 
 # and applies speech recognition 
@@ -70,6 +62,8 @@ def count_done(futures):
 @click.argument('input')
 @click.argument('output', required=False)
 def speech2text(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, keep_temporary, silent, max_workers): 
+
+    start_time = time.perf_counter()
 
     base_filename, file_extension = os.path.splitext(input)
     if output == None:
@@ -122,35 +116,47 @@ Max Workers          : {}
     # Create <padding> ms silence chunk 
     silence = AudioSegment.silent(duration = padding) 
     futures = []
-    with ThreadPoolExecutor(max_workers = max_workers) as executor:
-        # process each chunk 
-        for i, chunk in enumerate(chunks): 
-            futures.append(
-                executor.submit(
-                    process_chunck, 
-                    chunk, 
-                    i, 
-                    base_filename, 
-                    temp_dir, 
-                    ambient_noise, 
-                    keep_temporary, 
-                    silence, 
-                    language
+    try:
+        with ThreadPoolExecutor(max_workers = max_workers) as executor:
+            # process each chunk 
+            for i, chunk in enumerate(chunks): 
+                futures.append(
+                    executor.submit(
+                        process_chunck, 
+                        chunk, 
+                        i, 
+                        base_filename, 
+                        temp_dir, 
+                        ambient_noise, 
+                        keep_temporary, 
+                        silence, 
+                        language
+                    )
                 )
-            )
-        while True:
-            done = count_done(futures) 
-            progress.printProgressBar(done, total, prefix='Converting:') if not silent else None
-            if done == total:
-                break
-            time.sleep(.5)
+            progress.printProgressBar(0, total, prefix='Converting:') if not silent else None
+            for i, future in enumerate(as_completed(futures)):
+                if future.exception():
+                    # there should be a problem with internet log exception and abort
+                    executor._threads.clear()
+                    thread._threads_queues.clear()                
+                    sys.stderr.write('\nError: Requests are failing. Please check your internet connection\n')
+                    raise future.exception()
+
+                progress.printProgressBar(i+1, total, prefix='Converting:') if not silent else None
+    except Exception as e:
+        sys.stderr.write('\nError: Canceling execution: {}\n'.format(e))
+        sys.exit(1)
 
     print('\nSaving...') if not silent else None
     with open(output, 'w+') as f:
         for text in map(lambda f: f.result(), futures):
             if text != None:
                 f.write('{}.\n'.format(text)) 
-    print('Done!') if not silent else None
+    end_time = time.perf_counter()
+    seconds = end_time - start_time 
+    minutes = int(seconds) // 60
+    seconds = seconds - (minutes * 60)
+    print('Done in {:d} minutes {:0.2f} seconds!'.format(minutes, seconds)) if not silent else None
   
 if __name__ == '__main__': 
     speech2text()
