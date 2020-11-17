@@ -3,14 +3,14 @@ import speech_recognition as sr
 import os 
 from pydub import AudioSegment 
 from pydub.silence import split_on_silence 
-
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import progress
 import click
 import time
 
-def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise, silence, language):
+def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise, keep_temporary, silence, language):
 
     audio_chunk = silence + chunk + silence 
 
@@ -41,8 +41,19 @@ def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise,
         return None
 
     except sr.RequestError as e: 
-        print('Could not request results. check your internet connection') 
-        exit(1)
+        sys.stderr.write('Requests are failing. Please check your internet connection\n')
+        raise RuntimeError('Requests are failing. Please check your internet connection')
+
+    finally:
+        if not keep_temporary:
+            os.remove(filename)
+
+def count_done(futures):
+    done = 0
+    for future in futures:
+        if future.done():
+            done += 1
+    return done
 
 # a function that splits the audio file into chunks 
 # and applies speech recognition 
@@ -53,25 +64,28 @@ def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise,
 @click.option('--padding', '-p', default=100, help="how much silence to add at both ends so it doesn't seem abruptly sliced. default 100ms")
 @click.option('--language', '-L', default='en-US', help='language to use for speech recognition. default en-US')
 @click.option('--ambient-noise', '-n', is_flag=True, help="try to adapt listening to ambient noise")
+@click.option('--keep-temporary', '-k', is_flag=True, help="do not remove temporary audio files (debugging)")
+@click.option('--silent', '-s', is_flag=True, help="do not print anything on screen")
 @click.option('--max-workers', '-m', default=os.cpu_count(), help='number of concurrent conversions. default {}'.format(os.cpu_count()))
 @click.argument('input')
 @click.argument('output', required=False)
-def speech2text(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, max_workers): 
+def speech2text(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, keep_temporary, silent, max_workers): 
 
     base_filename, file_extension = os.path.splitext(input)
     if output == None:
         output = base_filename + '.txt'
-    # open the audio file stored in file system
+
     summary='''
 Speech to Text process
-Input File        : {}
-Output File       : {}
-Language          : {}
-Silence Length    : {} ms.
-Silence Threshold : {} dBFS
-Padding           : {} ms.
-Adapt to Noise    : {} 
-Max Workers       : {}
+Input File           : {}
+Output File          : {}
+Language             : {}
+Silence Length       : {} ms.
+Silence Threshold    : {} dBFS
+Padding              : {} ms.
+Adapt to Noise       : {} 
+Keep temporary files : {}
+Max Workers          : {}
     '''
     print(summary.format(
         input, 
@@ -81,13 +95,15 @@ Max Workers       : {}
         silence_thresh,
         padding,
         ambient_noise,
+        keep_temporary,
         max_workers
         )
-    )
+    ) if not silent else None
     
+    # open the audio file stored in file system
     speech = AudioSegment.from_file(input) 
   
-    print('Splitting (this could take a while...)')
+    print('Splitting (this could take a while...)') if not silent else None
     # split track where silence is <silence-lenght> ms. or bigger
     chunks = split_on_silence(speech, 
         # must be silent for at least <silence-lenght> ms. 
@@ -97,6 +113,7 @@ Max Workers       : {}
     ) 
     total = len(chunks) 
 
+    # create temporary dir if it doesn't exist
     try: 
         os.mkdir(temp_dir) 
     except(FileExistsError): 
@@ -108,27 +125,32 @@ Max Workers       : {}
     with ThreadPoolExecutor(max_workers = max_workers) as executor:
         # process each chunk 
         for i, chunk in enumerate(chunks): 
-            futures.append(executor.submit(process_chunck, chunk, i, base_filename, temp_dir, ambient_noise, silence, language))
-
-        done = 0
-        text = [None] * total
-        while done < total:
-            done = 0
-            for i, future in enumerate(futures):
-                if future.done():
-                    done += 1
-                    if not text[i]:
-                        text[i] = future.result()
-            progress.printProgressBar(done, total, prefix='Converting:')
+            futures.append(
+                executor.submit(
+                    process_chunck, 
+                    chunk, 
+                    i, 
+                    base_filename, 
+                    temp_dir, 
+                    ambient_noise, 
+                    keep_temporary, 
+                    silence, 
+                    language
+                )
+            )
+        while True:
+            done = count_done(futures) 
+            progress.printProgressBar(done, total, prefix='Converting:') if not silent else None
+            if done == total:
+                break
             time.sleep(.5)
 
-    print('\nSaving...')
+    print('\nSaving...') if not silent else None
     with open(output, 'w+') as f:
-        for t in text:
-            if t != None:
-                f.write('{}.\n'.format(t)) 
-    print('Done!')
-  
+        for text in map(lambda f: f.result(), futures):
+            if text != None:
+                f.write('{}.\n'.format(text)) 
+    print('Done!') if not silent else None
   
 if __name__ == '__main__': 
     speech2text()
