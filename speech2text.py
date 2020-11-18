@@ -125,7 +125,7 @@ Max Workers          : {}
                         process_chunck, 
                         chunk, 
                         i, 
-                        base_filename, 
+                        os.path.basename(base_filename), 
                         temp_dir, 
                         ambient_noise, 
                         keep_temporary, 
@@ -136,10 +136,9 @@ Max Workers          : {}
             progress.printProgressBar(0, total, prefix='Converting:') if not silent else None
             for i, future in enumerate(as_completed(futures)):
                 if future.exception():
-                    # there should be a problem with internet log exception and abort
+                    # there should be a problem with internet abort
                     executor._threads.clear()
                     thread._threads_queues.clear()                
-                    sys.stderr.write('\nError: Requests are failing. Please check your internet connection\n')
                     raise future.exception()
 
                 progress.printProgressBar(i+1, total, prefix='Converting:') if not silent else None
