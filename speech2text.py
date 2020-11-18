@@ -98,9 +98,9 @@ Max Workers          : {}
     speech = AudioSegment.from_file(input) 
   
     print('Splitting (this could take a while...)') if not silent else None
-    # split track where silence is <silence-lenght> ms. or bigger
+    # split track where silence is <silence-length> ms. or bigger
     chunks = split_on_silence(speech, 
-        # must be silent for at least <silence-lenght> ms. 
+        # must be silent for at least <silence-length> ms. 
         min_silence_len = silence_length, 
         # consider it silent if quieter than <silence-thresh> dBFS 
         silence_thresh = silence_thresh,
