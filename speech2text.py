@@ -1,54 +1,10 @@
 # importing libraries 
-import speech_recognition as sr 
 import os 
-from pydub import AudioSegment 
-from pydub.silence import split_on_silence 
-import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed, thread
-
-import progress
+from util.duration import duration_str
+from process.process import process
 import click
 import time
 
-def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise, keep_temporary, silence, language):
-
-    audio_chunk = silence + chunk + silence 
-
-    # the name of the newly created chunk 
-    filename = os.path.join(temp_dir, '{}.{:08d}.wav'.format(base_filename, current_chunk))
-
-    # export audio chunk and save it
-    audio_chunk.export(filename, bitrate ='192k', format ="wav") 
-
-    # create a speech recognition object 
-    r = sr.Recognizer() 
-
-    # recognize the chunk 
-    with sr.AudioFile(filename) as source: 
-        if ambient_noise:
-            r.adjust_for_ambient_noise(source)
-        audio_listened = r.listen(source) 
-
-    try: 
-        # try converting it to text 
-        rec = r.recognize_google(audio_listened, language=language) 
-        # write the output to the file. 
-        return rec
-
-    # catch any errors. 
-    except sr.UnknownValueError: 
-        # nothing was recognized in this chunk
-        return None
-
-    except sr.RequestError as e: 
-        raise RuntimeError('Requests are failing. Please check your internet connection')
-
-    finally:
-        if not keep_temporary:
-            os.remove(filename)
-
-# a function that splits the audio file into chunks 
-# and applies speech recognition 
 @click.command()
 @click.option('--silence-length', '-l', default=700, help='consider silence anything longer than <silence-length> ms. default 700 ms.')
 @click.option('--silence-thresh', '-t', default=-40, help='consider silent if quiter than <silence-length> dBFS. default -40')
@@ -65,9 +21,8 @@ def speech2text(input, output, silence_length, silence_thresh, temp_dir, padding
 
     start_time = time.perf_counter()
 
-    base_filename, file_extension = os.path.splitext(input)
     if output == None:
-        output = base_filename + '.txt'
+        output = os.path.splitext(input)[0] + '.txt'
 
     summary='''
 Speech to Text process
@@ -94,68 +49,9 @@ Max Workers          : {}
         )
     ) if not silent else None
     
-    # open the audio file stored in file system
-    speech = AudioSegment.from_file(input) 
-  
-    print('Splitting (this could take a while...)') if not silent else None
-    # split track where silence is <silence-length> ms. or bigger
-    chunks = split_on_silence(speech, 
-        # must be silent for at least <silence-length> ms. 
-        min_silence_len = silence_length, 
-        # consider it silent if quieter than <silence-thresh> dBFS 
-        silence_thresh = silence_thresh,
-    ) 
-    total = len(chunks) 
+    process(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, keep_temporary, silent, max_workers)
 
-    # create temporary dir if it doesn't exist
-    try: 
-        os.mkdir(temp_dir) 
-    except(FileExistsError): 
-        pass
-  
-    # Create <padding> ms silence chunk 
-    silence = AudioSegment.silent(duration = padding) 
-    futures = []
-    try:
-        with ThreadPoolExecutor(max_workers = max_workers) as executor:
-            # process each chunk 
-            for i, chunk in enumerate(chunks): 
-                futures.append(
-                    executor.submit(
-                        process_chunck, 
-                        chunk, 
-                        i, 
-                        os.path.basename(base_filename), 
-                        temp_dir, 
-                        ambient_noise, 
-                        keep_temporary, 
-                        silence, 
-                        language
-                    )
-                )
-            progress.printProgressBar(0, total, prefix='Converting:') if not silent else None
-            for i, future in enumerate(as_completed(futures)):
-                if future.exception():
-                    # there should be a problem with internet abort
-                    executor._threads.clear()
-                    thread._threads_queues.clear()                
-                    raise future.exception()
-
-                progress.printProgressBar(i+1, total, prefix='Converting:') if not silent else None
-    except Exception as e:
-        sys.stderr.write('\nError: Canceling execution: {}\n'.format(e))
-        sys.exit(1)
-
-    print('\nSaving...') if not silent else None
-    with open(output, 'w+') as f:
-        for text in map(lambda f: f.result(), futures):
-            if text != None:
-                f.write('{}.\n'.format(text)) 
-    end_time = time.perf_counter()
-    seconds = end_time - start_time 
-    minutes = int(seconds) // 60
-    seconds = seconds - (minutes * 60)
-    print('Done in {:d} minutes {:0.2f} seconds!'.format(minutes, seconds)) if not silent else None
+    print('Done in {}!'.format(duration_str(start_time, time.perf_counter()))) if not silent else None
   
 if __name__ == '__main__': 
     speech2text()
