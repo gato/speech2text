@@ -38,7 +38,7 @@ def process_chunck(chunk, current_chunk, base_filename, temp_dir, ambient_noise,
         if not keep_temporary:
             os.remove(filename)
 
-def process(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, keep_temporary, silent, max_workers): 
+def process(input, output, silence_length, silence_thresh, temp_dir, padding, language, ambient_noise, keep_temporary, silent, seek_step, max_workers): 
     # open the audio file stored in file system
     speech = AudioSegment.from_file(input) 
   
@@ -49,6 +49,7 @@ def process(input, output, silence_length, silence_thresh, temp_dir, padding, la
         min_silence_len = silence_length, 
         # consider it silent if quieter than <silence-thresh> dBFS 
         silence_thresh = silence_thresh,
+        seek_step = seek_step
     ) 
     total = len(chunks) 
 
